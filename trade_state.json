@@ -1,3 +1,7 @@
 {
-  "active_trades": {}
+  "active_trades": {},
+  "users": [
+    "6771542606"
+  ],
+  "update_offset": 297266935
 }
