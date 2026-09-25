@@ -5,30 +5,64 @@ from datetime import datetime, timezone, timedelta
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# =========================
-# WATCHLIST
-# =========================
-
+# NIFTY 50 watchlist
 WATCHLIST = {
-    "RELIANCE": "RELIANCE.NS",
-    "TCS": "TCS.NS",
-    "HDFCBANK": "HDFCBANK.NS",
-    "ICICIBANK": "ICICIBANK.NS",
-    "INFY": "INFY.NS",
-    "SBIN": "SBIN.NS",
+    "ADANIENTERPRISES": "ADANIENT.NS",
+    "ADANIPORTS": "ADANIPORTS.NS",
+    "APOLLOHOSP": "APOLLOHOSP.NS",
+    "ASIANPAINT": "ASIANPAINT.NS",
+    "AXISBANK": "AXISBANK.NS",
+    "BAJAJ-AUTO": "BAJAJ-AUTO.NS",
+    "BAJAJFINSV": "BAJAJFINSV.NS",
+    "BAJFINANCE": "BAJFINANCE.NS",
+    "BEL": "BEL.NS",
     "BHARTIARTL": "BHARTIARTL.NS",
+    "CIPLA": "CIPLA.NS",
+    "COALINDIA": "COALINDIA.NS",
+    "DRREDDY": "DRREDDY.NS",
+    "EICHERMOT": "EICHERMOT.NS",
+    "ETERNAL": "ETERNAL.NS",
+    "GRASIM": "GRASIM.NS",
+    "HCLTECH": "HCLTECH.NS",
+    "HDFCBANK": "HDFCBANK.NS",
+    "HDFCLIFE": "HDFCLIFE.NS",
+    "HEROMOTOCO": "HEROMOTOCO.NS",
+    "HINDALCO": "HINDALCO.NS",
+    "HINDUNILVR": "HINDUNILVR.NS",
+    "ICICIBANK": "ICICIBANK.NS",
+    "INDUSINDBK": "INDUSINDBK.NS",
+    "INFY": "INFY.NS",
     "ITC": "ITC.NS",
+    "JIOFIN": "JIOFIN.NS",
+    "JSWSTEEL": "JSWSTEEL.NS",
+    "KOTAKBANK": "KOTAKBANK.NS",
     "LT": "LT.NS",
+    "M&M": "M&M.NS",
+    "MARUTI": "MARUTI.NS",
+    "MAXHEALTH": "MAXHEALTH.NS",
+    "NESTLEIND": "NESTLEIND.NS",
+    "NTPC": "NTPC.NS",
+    "ONGC": "ONGC.NS",
+    "POWERGRID": "POWERGRID.NS",
+    "RELIANCE": "RELIANCE.NS",
+    "SBILIFE": "SBILIFE.NS",
+    "SBIN": "SBIN.NS",
+    "SHRIRAMFIN": "SHRIRAMFIN.NS",
+    "SUNPHARMA": "SUNPHARMA.NS",
+    "TATACONSUM": "TATACONSUM.NS",
     "TATAMOTORS": "TATAMOTORS.NS",
+    "TATASTEEL": "TATASTEEL.NS",
+    "TECHM": "TECHM.NS",
+    "TITAN": "TITAN.NS",
+    "TRENT": "TRENT.NS",
+    "ULTRACEMCO": "ULTRACEMCO.NS",
+    "WIPRO": "WIPRO.NS",
+    "TMPV": "TMPV.NS",
 }
 
 PRICE_ALERT_PERCENT = 1.0
 VOLUME_SPIKE_MULTIPLIER = 2.0
 
-
-# =========================
-# TELEGRAM
-# =========================
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -45,10 +79,6 @@ def send_telegram(message):
     response.raise_for_status()
 
 
-# =========================
-# MARKET DATA
-# =========================
-
 def get_stock_data(symbol):
     url = (
         f"https://query1.finance.yahoo.com/v8/finance/chart/"
@@ -64,24 +94,15 @@ def get_stock_data(symbol):
     response.raise_for_status()
 
     data = response.json()
-
     result = data["chart"]["result"][0]
 
-    timestamps = result["timestamp"]
     quote = result["indicators"]["quote"][0]
 
-    closes = quote["close"]
-    volumes = quote["volume"]
+    closes = quote.get("close", [])
+    volumes = quote.get("volume", [])
 
-    clean_closes = [
-        c for c in closes
-        if c is not None
-    ]
-
-    clean_volumes = [
-        v for v in volumes
-        if v is not None
-    ]
+    clean_closes = [x for x in closes if x is not None]
+    clean_volumes = [x for x in volumes if x is not None]
 
     if len(clean_closes) < 2:
         return None
@@ -89,16 +110,15 @@ def get_stock_data(symbol):
     current_price = clean_closes[-1]
     previous_price = clean_closes[-2]
 
-    price_change = (
+    change = (
         (current_price - previous_price)
         / previous_price
     ) * 100
 
-    volume_spike = False
+    volume_ratio = 0
 
     if len(clean_volumes) >= 13:
         current_volume = clean_volumes[-1]
-
         previous_volumes = clean_volumes[-13:-1]
 
         average_volume = (
@@ -109,38 +129,23 @@ def get_stock_data(symbol):
         if average_volume > 0:
             volume_ratio = current_volume / average_volume
 
-            if volume_ratio >= VOLUME_SPIKE_MULTIPLIER:
-                volume_spike = True
-        else:
-            volume_ratio = 0
-    else:
-        volume_ratio = 0
-
     return {
         "price": current_price,
-        "previous": previous_price,
-        "change": price_change,
-        "volume_ratio": volume_ratio,
-        "volume_spike": volume_spike
+        "change": change,
+        "volume_ratio": volume_ratio
     }
 
-
-# =========================
-# MARKET CHECK
-# =========================
 
 def check_market():
 
     ist = timezone(timedelta(hours=5, minutes=30))
-
     now = datetime.now(ist)
 
-    # Monday-Friday only
+    # Monday-Friday
     if now.weekday() >= 5:
-        print("Market closed: Weekend")
+        print("Weekend - market closed")
         return
 
-    # NSE regular market
     market_start = now.replace(
         hour=9,
         minute=15,
@@ -159,7 +164,12 @@ def check_market():
         print("Market closed:", now.strftime("%H:%M:%S"))
         return
 
-    print("Checking market:", now.strftime("%H:%M:%S"))
+    print(
+        "Scanning NIFTY 50:",
+        now.strftime("%d-%m-%Y %H:%M:%S")
+    )
+
+    alerts_sent = 0
 
     for name, symbol in WATCHLIST.items():
 
@@ -174,46 +184,50 @@ def check_market():
             change = data["change"]
             volume_ratio = data["volume_ratio"]
 
-            alerts = []
+            alert_lines = []
 
             if abs(change) >= PRICE_ALERT_PERCENT:
+
                 direction = "📈 UP" if change > 0 else "📉 DOWN"
 
-                alerts.append(
-                    f"{direction} Price movement: {change:+.2f}%"
+                alert_lines.append(
+                    f"{direction}: {change:+.2f}%"
                 )
 
-            if data["volume_spike"]:
-                alerts.append(
-                    f"📊 Volume spike: {volume_ratio:.1f}× average"
+            if volume_ratio >= VOLUME_SPIKE_MULTIPLIER:
+
+                alert_lines.append(
+                    f"📊 Volume: {volume_ratio:.1f}× average"
                 )
 
-            if alerts:
+            if alert_lines:
 
                 message = (
-                    "🚨 STOCK ALERT\n\n"
+                    "🚨 NIFTY 50 STOCK ALERT\n\n"
                     f"🏢 {name}\n"
-                    f"💰 Price: ₹{price:,.2f}\n\n"
-                    + "\n".join(alerts)
+                    f"💰 ₹{price:,.2f}\n\n"
+                    + "\n".join(alert_lines)
                     + "\n\n"
-                    f"⏰ {now.strftime('%d-%m-%Y %H:%M:%S')} IST\n"
-                    f"📊 NSE"
+                    f"⏰ {now.strftime('%H:%M:%S')} IST\n"
+                    "📊 Data: Yahoo Finance\n"
+                    "⚠️ Informational alert"
                 )
 
                 send_telegram(message)
 
+                alerts_sent += 1
                 print("Alert sent:", name)
 
-        except Exception as e:
+        except Exception as error:
 
             print(
-                f"Error checking {name}: {e}"
+                f"{name} error: {error}"
             )
 
+    print(
+        f"Scan completed. Alerts sent: {alerts_sent}"
+    )
 
-# =========================
-# START
-# =========================
 
 if __name__ == "__main__":
 
@@ -221,11 +235,5 @@ if __name__ == "__main__":
         raise Exception(
             "BOT_TOKEN or CHAT_ID is missing"
         )
-
-    send_telegram(
-        "🟢 STOCK BOT CHECK\n\n"
-        "GitHub Actions is running correctly.\n"
-        "Market scanner started successfully."
-    )
 
     check_market()
