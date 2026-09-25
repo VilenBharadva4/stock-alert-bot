@@ -1,11 +1,22 @@
 import os
 import requests
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, time
+from urllib.parse import quote
+from zoneinfo import ZoneInfo
+
+
+# ============================================================
+# TELEGRAM SETTINGS
+# ============================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# NIFTY 50 watchlist
+
+# ============================================================
+# NIFTY 50 WATCHLIST
+# ============================================================
+
 WATCHLIST = {
     "ADANIENTERPRISES": "ADANIENT.NS",
     "ADANIPORTS": "ADANIPORTS.NS",
@@ -50,196 +61,360 @@ WATCHLIST = {
     "SHRIRAMFIN": "SHRIRAMFIN.NS",
     "SUNPHARMA": "SUNPHARMA.NS",
     "TATACONSUM": "TATACONSUM.NS",
-    "TATAMOTORS": "TATAMOTORS.NS",
+    "TMPV": "TMPV.NS",
     "TATASTEEL": "TATASTEEL.NS",
     "TECHM": "TECHM.NS",
     "TITAN": "TITAN.NS",
     "TRENT": "TRENT.NS",
     "ULTRACEMCO": "ULTRACEMCO.NS",
     "WIPRO": "WIPRO.NS",
-    "TMPV": "TMPV.NS",
 }
+
+
+# ============================================================
+# ALERT SETTINGS
+# ============================================================
 
 PRICE_ALERT_PERCENT = 1.0
 VOLUME_SPIKE_MULTIPLIER = 2.0
 
 
+# ============================================================
+# TELEGRAM FUNCTION
+# ============================================================
+
 def send_telegram(message):
+    if not BOT_TOKEN or not CHAT_ID:
+        print("Telegram credentials are missing.")
+        return False
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-    response = requests.post(
-        url,
-        data={
-            "chat_id": CHAT_ID,
-            "text": message
-        },
-        timeout=20
-    )
-
-    response.raise_for_status()
-
-
-def get_stock_data(symbol):
-    url = (
-        f"https://query1.finance.yahoo.com/v8/finance/chart/"
-        f"{symbol}?interval=5m&range=1d"
-    )
-
-    response = requests.get(
-        url,
-        headers={"User-Agent": "Mozilla/5.0"},
-        timeout=20
-    )
-
-    response.raise_for_status()
-
-    data = response.json()
-    result = data["chart"]["result"][0]
-
-    quote = result["indicators"]["quote"][0]
-
-    closes = quote.get("close", [])
-    volumes = quote.get("volume", [])
-
-    clean_closes = [x for x in closes if x is not None]
-    clean_volumes = [x for x in volumes if x is not None]
-
-    if len(clean_closes) < 2:
-        return None
-
-    current_price = clean_closes[-1]
-    previous_price = clean_closes[-2]
-
-    change = (
-        (current_price - previous_price)
-        / previous_price
-    ) * 100
-
-    volume_ratio = 0
-
-    if len(clean_volumes) >= 13:
-        current_volume = clean_volumes[-1]
-        previous_volumes = clean_volumes[-13:-1]
-
-        average_volume = (
-            sum(previous_volumes)
-            / len(previous_volumes)
-        )
-
-        if average_volume > 0:
-            volume_ratio = current_volume / average_volume
-
-    return {
-        "price": current_price,
-        "change": change,
-        "volume_ratio": volume_ratio
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message
     }
 
+    try:
+        response = requests.post(
+            url,
+            data=payload,
+            timeout=15
+        )
+
+        if response.status_code == 200:
+            print("Telegram message sent successfully.")
+            return True
+
+        print(
+            f"Telegram error: "
+            f"{response.status_code} - {response.text}"
+        )
+
+    except Exception as e:
+        print(f"Telegram connection error: {e}")
+
+    return False
+
+
+# ============================================================
+# GET STOCK DATA FROM YAHOO FINANCE
+# ============================================================
+
+def get_stock_data(symbol):
+
+    try:
+        encoded_symbol = quote(symbol, safe="")
+
+        url = (
+            "https://query1.finance.yahoo.com/v8/finance/chart/"
+            f"{encoded_symbol}"
+        )
+
+        params = {
+            "interval": "5m",
+            "range": "1d"
+        }
+
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
+
+        response = requests.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=15
+        )
+
+        if response.status_code != 200:
+            print(
+                f"{symbol} error: "
+                f"{response.status_code} "
+                f"{response.text[:200]}"
+            )
+            return None
+
+        data = response.json()
+
+        result = data.get("chart", {}).get("result")
+
+        if not result:
+            print(f"{symbol}: No data returned.")
+            return None
+
+        result = result[0]
+
+        timestamps = result.get("timestamp")
+        indicators = result.get("indicators", {})
+        quote_data = indicators.get("quote", [])
+
+        if not timestamps or not quote_data:
+            print(f"{symbol}: Incomplete data.")
+            return None
+
+        quote_data = quote_data[0]
+
+        closes = quote_data.get("close", [])
+        volumes = quote_data.get("volume", [])
+
+        valid_data = []
+
+        for i in range(len(timestamps)):
+
+            if i >= len(closes):
+                continue
+
+            close = closes[i]
+
+            if close is None:
+                continue
+
+            volume = 0
+
+            if i < len(volumes) and volumes[i] is not None:
+                volume = volumes[i]
+
+            valid_data.append(
+                {
+                    "timestamp": timestamps[i],
+                    "close": float(close),
+                    "volume": float(volume)
+                }
+            )
+
+        if len(valid_data) < 2:
+            print(f"{symbol}: Not enough data.")
+            return None
+
+        return valid_data
+
+    except Exception as e:
+        print(f"{symbol} error: {e}")
+        return None
+
+
+# ============================================================
+# MARKET HOURS CHECK
+# ============================================================
+
+def is_market_open():
+
+    india_time = datetime.now(
+        ZoneInfo("Asia/Kolkata")
+    )
+
+    weekday = india_time.weekday()
+
+    # Monday = 0
+    # Sunday = 6
+
+    if weekday >= 5:
+        return False
+
+    current_time = india_time.time()
+
+    market_start = time(9, 15)
+    market_end = time(15, 30)
+
+    return market_start <= current_time <= market_end
+
+
+# ============================================================
+# MARKET SCANNER
+# ============================================================
 
 def check_market():
 
-    ist = timezone(timedelta(hours=5, minutes=30))
-    now = datetime.now(ist)
-
-    # Monday-Friday
-    if now.weekday() >= 5:
-        print("Weekend - market closed")
-        return
-
-    market_start = now.replace(
-        hour=9,
-        minute=15,
-        second=0,
-        microsecond=0
+    india_time = datetime.now(
+        ZoneInfo("Asia/Kolkata")
     )
-
-    market_end = now.replace(
-        hour=15,
-        minute=30,
-        second=0,
-        microsecond=0
-    )
-
-    if now < market_start or now > market_end:
-        print("Market closed:", now.strftime("%H:%M:%S"))
-        return
 
     print(
-        "Scanning NIFTY 50:",
-        now.strftime("%d-%m-%Y %H:%M:%S")
+        "Scanning NIFTY 50: "
+        f"{india_time.strftime('%d-%m-%Y %H:%M:%S')}"
     )
+
+    if not is_market_open():
+
+        print("Market is currently closed.")
+
+        return
 
     alerts_sent = 0
+    successful_stocks = 0
+    failed_stocks = 0
 
-    for name, symbol in WATCHLIST.items():
+    for stock_name, symbol in WATCHLIST.items():
 
-        try:
+        data = get_stock_data(symbol)
 
-            data = get_stock_data(symbol)
+        if not data:
+            failed_stocks += 1
+            continue
 
-            if not data:
-                continue
+        successful_stocks += 1
 
-            price = data["price"]
-            change = data["change"]
-            volume_ratio = data["volume_ratio"]
+        # Latest candle
+        latest = data[-1]
 
-            alert_lines = []
+        # Previous candle
+        previous = data[-2]
 
-            if abs(change) >= PRICE_ALERT_PERCENT:
+        latest_price = latest["close"]
+        previous_price = previous["close"]
 
-                direction = "📈 UP" if change > 0 else "📉 DOWN"
+        if previous_price <= 0:
+            continue
 
-                alert_lines.append(
-                    f"{direction}: {change:+.2f}%"
-                )
+        # ====================================================
+        # PRICE CHANGE
+        # ====================================================
 
-            if volume_ratio >= VOLUME_SPIKE_MULTIPLIER:
+        price_change = (
+            (latest_price - previous_price)
+            / previous_price
+        ) * 100
 
-                alert_lines.append(
-                    f"📊 Volume: {volume_ratio:.1f}× average"
-                )
+        # ====================================================
+        # VOLUME SPIKE
+        # ====================================================
 
-            if alert_lines:
+        recent_volumes = []
 
-                message = (
-                    "🚨 NIFTY 50 STOCK ALERT\n\n"
-                    f"🏢 {name}\n"
-                    f"💰 ₹{price:,.2f}\n\n"
-                    + "\n".join(alert_lines)
-                    + "\n\n"
-                    f"⏰ {now.strftime('%H:%M:%S')} IST\n"
-                    "📊 Data: Yahoo Finance\n"
-                    "⚠️ Informational alert"
-                )
+        for item in data[:-1]:
 
-                send_telegram(message)
+            volume = item["volume"]
 
-                alerts_sent += 1
-                print("Alert sent:", name)
+            if volume > 0:
+                recent_volumes.append(volume)
 
-        except Exception as error:
+        if len(recent_volumes) > 10:
+            recent_volumes = recent_volumes[-10:]
 
-            print(
-                f"{name} error: {error}"
+        average_volume = 0
+
+        if recent_volumes:
+            average_volume = (
+                sum(recent_volumes)
+                / len(recent_volumes)
             )
 
+        latest_volume = latest["volume"]
+
+        volume_ratio = 0
+
+        if average_volume > 0:
+            volume_ratio = (
+                latest_volume
+                / average_volume
+            )
+
+        # ====================================================
+        # ALERT CONDITIONS
+        # ====================================================
+
+        price_alert = (
+            abs(price_change)
+            >= PRICE_ALERT_PERCENT
+        )
+
+        volume_alert = (
+            volume_ratio
+            >= VOLUME_SPIKE_MULTIPLIER
+        )
+
+        if not price_alert and not volume_alert:
+            continue
+
+        # ====================================================
+        # ALERT TYPE
+        # ====================================================
+
+        if price_change > 0:
+            direction = "🟢 UP"
+        elif price_change < 0:
+            direction = "🔴 DOWN"
+        else:
+            direction = "⚪ FLAT"
+
+        reasons = []
+
+        if price_alert:
+            reasons.append(
+                f"Price move: {price_change:+.2f}%"
+            )
+
+        if volume_alert:
+            reasons.append(
+                f"Volume: {volume_ratio:.1f}x average"
+            )
+
+        reason_text = "\n".join(reasons)
+
+        # ====================================================
+        # TELEGRAM MESSAGE
+        # ====================================================
+
+        message = (
+            "🚨 STOCK MARKET ALERT\n\n"
+            f"📊 Stock: {stock_name}\n"
+            f"💰 Price: ₹{latest_price:.2f}\n"
+            f"{direction}\n\n"
+            f"{reason_text}\n\n"
+            f"⏰ Time: "
+            f"{india_time.strftime('%d-%m-%Y %H:%M:%S')}\n"
+            "📡 Source: Yahoo Finance\n\n"
+            "⚠️ Informational alert only. "
+            "Not investment advice."
+        )
+
+        if send_telegram(message):
+            alerts_sent += 1
+
+    # ========================================================
+    # FINAL LOG
+    # ========================================================
+
     print(
-        f"Scan completed. Alerts sent: {alerts_sent}"
+        f"Scan completed. "
+        f"Successful: {successful_stocks}, "
+        f"Failed: {failed_stocks}, "
+        f"Alerts sent: {alerts_sent}"
     )
 
+
+# ============================================================
+# MAIN
+# ============================================================
 
 if __name__ == "__main__":
 
     if not BOT_TOKEN or not CHAT_ID:
-        raise Exception(
-            "BOT_TOKEN or CHAT_ID is missing"
-        )
 
-    send_telegram(
-        "🟢 NIFTY 50 SCANNER\n\n"
-        "GitHub Actions is running.\n"
-        "Starting market scan..."
-    )
+        raise Exception(
+            "BOT_TOKEN or CHAT_ID is missing. "
+            "Check GitHub Secrets."
+        )
 
     check_market()
