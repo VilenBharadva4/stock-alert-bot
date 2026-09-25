@@ -236,4 +236,10 @@ if __name__ == "__main__":
             "BOT_TOKEN or CHAT_ID is missing"
         )
 
+    send_telegram(
+        "🟢 NIFTY 50 SCANNER\n\n"
+        "GitHub Actions is running.\n"
+        "Starting market scan..."
+    )
+
     check_market()
