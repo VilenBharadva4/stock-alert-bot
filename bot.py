@@ -78,12 +78,16 @@ WATCHLIST = {
 PRICE_ALERT_PERCENT = 1.0
 VOLUME_SPIKE_MULTIPLIER = 2.0
 
+RSI_PERIOD = 14
+EMA_PERIOD = 20
+
 
 # ============================================================
-# TELEGRAM FUNCTION
+# TELEGRAM
 # ============================================================
 
 def send_telegram(message):
+
     if not BOT_TOKEN or not CHAT_ID:
         print("Telegram credentials are missing.")
         return False
@@ -96,6 +100,7 @@ def send_telegram(message):
     }
 
     try:
+
         response = requests.post(
             url,
             data=payload,
@@ -118,12 +123,13 @@ def send_telegram(message):
 
 
 # ============================================================
-# GET STOCK DATA FROM YAHOO FINANCE
+# GET STOCK DATA
 # ============================================================
 
 def get_stock_data(symbol):
 
     try:
+
         encoded_symbol = quote(symbol, safe="")
 
         url = (
@@ -148,11 +154,12 @@ def get_stock_data(symbol):
         )
 
         if response.status_code != 200:
+
             print(
                 f"{symbol} error: "
-                f"{response.status_code} "
-                f"{response.text[:200]}"
+                f"{response.status_code}"
             )
+
             return None
 
         data = response.json()
@@ -160,17 +167,17 @@ def get_stock_data(symbol):
         result = data.get("chart", {}).get("result")
 
         if not result:
-            print(f"{symbol}: No data returned.")
             return None
 
         result = result[0]
 
         timestamps = result.get("timestamp")
+
         indicators = result.get("indicators", {})
+
         quote_data = indicators.get("quote", [])
 
         if not timestamps or not quote_data:
-            print(f"{symbol}: Incomplete data.")
             return None
 
         quote_data = quote_data[0]
@@ -192,8 +199,9 @@ def get_stock_data(symbol):
 
             volume = 0
 
-            if i < len(volumes) and volumes[i] is not None:
-                volume = volumes[i]
+            if i < len(volumes):
+                if volumes[i] is not None:
+                    volume = volumes[i]
 
             valid_data.append(
                 {
@@ -203,19 +211,94 @@ def get_stock_data(symbol):
                 }
             )
 
-        if len(valid_data) < 2:
+        if len(valid_data) < 25:
             print(f"{symbol}: Not enough data.")
             return None
 
         return valid_data
 
     except Exception as e:
+
         print(f"{symbol} error: {e}")
+
         return None
 
 
 # ============================================================
-# MARKET HOURS CHECK
+# EMA CALCULATION
+# ============================================================
+
+def calculate_ema(prices, period):
+
+    if len(prices) < period:
+        return None
+
+    multiplier = 2 / (period + 1)
+
+    ema = sum(prices[:period]) / period
+
+    for price in prices[period:]:
+
+        ema = (
+            (price - ema) * multiplier
+        ) + ema
+
+    return ema
+
+
+# ============================================================
+# RSI CALCULATION
+# ============================================================
+
+def calculate_rsi(prices, period=14):
+
+    if len(prices) <= period:
+        return None
+
+    gains = []
+    losses = []
+
+    for i in range(1, len(prices)):
+
+        change = prices[i] - prices[i - 1]
+
+        if change > 0:
+
+            gains.append(change)
+            losses.append(0)
+
+        else:
+
+            gains.append(0)
+            losses.append(abs(change))
+
+    average_gain = sum(gains[:period]) / period
+    average_loss = sum(losses[:period]) / period
+
+    for i in range(period, len(gains)):
+
+        average_gain = (
+            (average_gain * (period - 1))
+            + gains[i]
+        ) / period
+
+        average_loss = (
+            (average_loss * (period - 1))
+            + losses[i]
+        ) / period
+
+    if average_loss == 0:
+        return 100.0
+
+    rs = average_gain / average_loss
+
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi
+
+
+# ============================================================
+# MARKET HOURS
 # ============================================================
 
 def is_market_open():
@@ -224,12 +307,7 @@ def is_market_open():
         ZoneInfo("Asia/Kolkata")
     )
 
-    weekday = india_time.weekday()
-
-    # Monday = 0
-    # Sunday = 6
-
-    if weekday >= 5:
+    if india_time.weekday() >= 5:
         return False
 
     current_time = india_time.time()
@@ -237,7 +315,11 @@ def is_market_open():
     market_start = time(9, 15)
     market_end = time(15, 30)
 
-    return market_start <= current_time <= market_end
+    return (
+        market_start
+        <= current_time
+        <= market_end
+    )
 
 
 # ============================================================
@@ -270,69 +352,127 @@ def check_market():
         data = get_stock_data(symbol)
 
         if not data:
+
             failed_stocks += 1
+
             continue
 
         successful_stocks += 1
 
-        # Latest candle
-        latest = data[-1]
+        # ----------------------------------------------------
+        # PRICES
+        # ----------------------------------------------------
 
-        # Previous candle
-        previous = data[-2]
+        prices = [
+            item["close"]
+            for item in data
+        ]
 
-        latest_price = latest["close"]
-        previous_price = previous["close"]
+        latest_price = prices[-1]
+        previous_price = prices[-2]
 
         if previous_price <= 0:
             continue
 
-        # ====================================================
-        # PRICE CHANGE
-        # ====================================================
+        # ----------------------------------------------------
+        # 5-MIN PRICE CHANGE
+        # ----------------------------------------------------
 
         price_change = (
             (latest_price - previous_price)
             / previous_price
         ) * 100
 
-        # ====================================================
-        # VOLUME SPIKE
-        # ====================================================
+        # ----------------------------------------------------
+        # VOLUME
+        # ----------------------------------------------------
 
-        recent_volumes = []
+        recent_volumes = [
+            item["volume"]
+            for item in data[:-1]
+            if item["volume"] > 0
+        ]
 
-        for item in data[:-1]:
-
-            volume = item["volume"]
-
-            if volume > 0:
-                recent_volumes.append(volume)
-
-        if len(recent_volumes) > 10:
-            recent_volumes = recent_volumes[-10:]
-
-        average_volume = 0
+        recent_volumes = recent_volumes[-10:]
 
         if recent_volumes:
+
             average_volume = (
                 sum(recent_volumes)
                 / len(recent_volumes)
             )
 
-        latest_volume = latest["volume"]
+        else:
+
+            average_volume = 0
+
+        latest_volume = data[-1]["volume"]
 
         volume_ratio = 0
 
         if average_volume > 0:
+
             volume_ratio = (
                 latest_volume
                 / average_volume
             )
 
-        # ====================================================
+        # ----------------------------------------------------
+        # RSI
+        # ----------------------------------------------------
+
+        rsi = calculate_rsi(
+            prices,
+            RSI_PERIOD
+        )
+
+        # ----------------------------------------------------
+        # EMA 20
+        # ----------------------------------------------------
+
+        ema20 = calculate_ema(
+            prices,
+            EMA_PERIOD
+        )
+
+        if rsi is None or ema20 is None:
+            continue
+
+        # ----------------------------------------------------
+        # INDICATOR STATUS
+        # ----------------------------------------------------
+
+        if latest_price > ema20:
+
+            ema_status = "🟢 Price above EMA20"
+
+        elif latest_price < ema20:
+
+            ema_status = "🔴 Price below EMA20"
+
+        else:
+
+            ema_status = "⚪ Price near EMA20"
+
+        if rsi >= 70:
+
+            rsi_status = "🔴 RSI Overbought"
+
+        elif rsi <= 30:
+
+            rsi_status = "🟢 RSI Oversold"
+
+        elif rsi >= 50:
+
+            rsi_status = "🟢 RSI Positive Zone"
+
+        else:
+
+            rsi_status = "🟡 RSI Weak Zone"
+
+        # ----------------------------------------------------
         # ALERT CONDITIONS
-        # ====================================================
+        # ----------------------------------------------------
 
         price_alert = (
             abs(price_change)
@@ -344,57 +484,98 @@ def check_market():
             >= VOLUME_SPIKE_MULTIPLIER
         )
 
-        if not price_alert and not volume_alert:
+        rsi_extreme = (
+            rsi >= 70
+            or rsi <= 30
+        )
+
+        # Alert only when meaningful movement exists
+        if (
+            not price_alert
+            and not volume_alert
+            and not rsi_extreme
+        ):
             continue
 
-        # ====================================================
-        # ALERT TYPE
-        # ====================================================
+        # ----------------------------------------------------
+        # DIRECTION
+        # ----------------------------------------------------
 
         if price_change > 0:
+
             direction = "🟢 UP"
+
         elif price_change < 0:
+
             direction = "🔴 DOWN"
+
         else:
+
             direction = "⚪ FLAT"
+
+        # ----------------------------------------------------
+        # REASONS
+        # ----------------------------------------------------
 
         reasons = []
 
         if price_alert:
+
             reasons.append(
-                f"Price move: {price_change:+.2f}%"
+                f"📈 5m Price Move: "
+                f"{price_change:+.2f}%"
             )
 
         if volume_alert:
+
             reasons.append(
-                f"Volume: {volume_ratio:.1f}x average"
+                f"📊 Volume Spike: "
+                f"{volume_ratio:.1f}x average"
+            )
+
+        if rsi_extreme:
+
+            reasons.append(
+                f"⚡ RSI: {rsi:.1f}"
             )
 
         reason_text = "\n".join(reasons)
 
-        # ====================================================
+        # ----------------------------------------------------
         # TELEGRAM MESSAGE
-        # ====================================================
+        # ----------------------------------------------------
 
         message = (
-            "🚨 STOCK MARKET ALERT\n\n"
-            f"📊 Stock: {stock_name}\n"
+            "🚨 NIFTY 50 MARKET ALERT\n\n"
+
+            f"📌 Stock: {stock_name}\n"
             f"💰 Price: ₹{latest_price:.2f}\n"
             f"{direction}\n\n"
+
             f"{reason_text}\n\n"
+
+            f"📊 RSI(14): {rsi:.1f}\n"
+            f"{rsi_status}\n\n"
+
+            f"📏 EMA(20): ₹{ema20:.2f}\n"
+            f"{ema_status}\n\n"
+
             f"⏰ Time: "
             f"{india_time.strftime('%d-%m-%Y %H:%M:%S')}\n"
-            "📡 Source: Yahoo Finance\n\n"
-            "⚠️ Informational alert only. "
+
+            "📡 Data: Yahoo Finance\n\n"
+
+            "⚠️ Informational market alert. "
             "Not investment advice."
         )
 
         if send_telegram(message):
+
             alerts_sent += 1
 
-    # ========================================================
+    # --------------------------------------------------------
     # FINAL LOG
-    # ========================================================
+    # --------------------------------------------------------
 
     print(
         f"Scan completed. "
