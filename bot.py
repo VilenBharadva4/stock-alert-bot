@@ -22,7 +22,7 @@ STATE_FILE = "trade_state.json"
 
 
 # ============================================================
-# NIFTY 50 WATCHLIST
+# WATCHLIST
 # ============================================================
 
 WATCHLIST = {
@@ -98,61 +98,82 @@ RSI_PERIOD = 14
 
 
 # ============================================================
-# TELEGRAM
+# TELEGRAM SEND
 # ============================================================
 
-def send_telegram(message):
+def send_telegram(message, chat_ids=None):
 
-    if not BOT_TOKEN or not CHAT_ID:
-        print("Telegram credentials missing.")
+    if not BOT_TOKEN:
+        print("BOT_TOKEN is missing.")
         return False
 
-    url = (
-        f"https://api.telegram.org/"
-        f"bot{BOT_TOKEN}/sendMessage"
-    )
+    if chat_ids is None:
+        chat_ids = [CHAT_ID]
 
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": message
-    }
+    success = False
 
-    try:
+    for chat_id in chat_ids:
 
-        response = requests.post(
-            url,
-            data=payload,
-            timeout=15
+        if not chat_id:
+            continue
+
+        url = (
+            f"https://api.telegram.org/"
+            f"bot{BOT_TOKEN}/sendMessage"
         )
 
-        if response.status_code == 200:
+        payload = {
+            "chat_id": str(chat_id),
+            "text": message
+        }
 
-            print("Telegram message sent successfully.")
+        try:
 
-            return True
+            response = requests.post(
+                url,
+                data=payload,
+                timeout=15
+            )
 
-        print(
-            f"Telegram error: "
-            f"{response.status_code} "
-            f"{response.text[:300]}"
-        )
+            if response.status_code == 200:
 
-    except Exception as e:
+                print(
+                    f"Telegram message sent to {chat_id}"
+                )
 
-        print(f"Telegram connection error: {e}")
+                success = True
 
-    return False
+            else:
+
+                print(
+                    f"Telegram error for {chat_id}: "
+                    f"{response.status_code}"
+                )
+
+        except Exception as e:
+
+            print(
+                f"Telegram error for {chat_id}: {e}"
+            )
+
+    return success
 
 
 # ============================================================
-# GITHUB STATE FUNCTIONS
+# GITHUB STATE
 # ============================================================
 
 def load_state():
 
     if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
+
         print("GitHub state storage not configured.")
-        return {}
+
+        return {
+            "users": [],
+            "active_trades": {},
+            "update_offset": 0
+        }
 
     url = (
         f"https://api.github.com/repos/"
@@ -176,7 +197,11 @@ def load_state():
 
             print("No previous trade state found.")
 
-            return {}
+            return {
+                "users": [],
+                "active_trades": {},
+                "update_offset": 0
+            }
 
         if response.status_code != 200:
 
@@ -185,7 +210,11 @@ def load_state():
                 f"{response.status_code}"
             )
 
-            return {}
+            return {
+                "users": [],
+                "active_trades": {},
+                "update_offset": 0
+            }
 
         data = response.json()
 
@@ -195,13 +224,28 @@ def load_state():
             content
         ).decode("utf-8")
 
-        return json.loads(decoded)
+        state = json.loads(decoded)
+
+        if "users" not in state:
+            state["users"] = []
+
+        if "active_trades" not in state:
+            state["active_trades"] = {}
+
+        if "update_offset" not in state:
+            state["update_offset"] = 0
+
+        return state
 
     except Exception as e:
 
         print(f"State load error: {e}")
 
-        return {}
+        return {
+            "users": [],
+            "active_trades": {},
+            "update_offset": 0
+        }
 
 
 def save_state(state):
@@ -224,8 +268,7 @@ def save_state(state):
 
     try:
 
-        # Check existing file
-        response = requests.get(
+        existing = requests.get(
             url,
             headers=headers,
             timeout=15
@@ -233,9 +276,8 @@ def save_state(state):
 
         sha = None
 
-        if response.status_code == 200:
-
-            sha = response.json().get("sha")
+        if existing.status_code == 200:
+            sha = existing.json().get("sha")
 
         content = json.dumps(
             state,
@@ -247,7 +289,7 @@ def save_state(state):
         ).decode("utf-8")
 
         payload = {
-            "message": "Update trade state",
+            "message": "Update bot state",
             "content": encoded
         }
 
@@ -281,7 +323,200 @@ def save_state(state):
 
 
 # ============================================================
-# YAHOO FINANCE DATA
+# MULTI USER TELEGRAM REGISTRATION
+# ============================================================
+
+def process_telegram_commands(state):
+
+    users = state.get("users", [])
+
+    # Owner automatically remains registered
+    if CHAT_ID and str(CHAT_ID) not in users:
+        users.append(str(CHAT_ID))
+
+    offset = state.get(
+        "update_offset",
+        0
+    )
+
+    url = (
+        f"https://api.telegram.org/"
+        f"bot{BOT_TOKEN}/getUpdates"
+    )
+
+    params = {
+        "offset": offset + 1,
+        "limit": 100,
+        "timeout": 1
+    }
+
+    try:
+
+        response = requests.get(
+            url,
+            params=params,
+            timeout=10
+        )
+
+        if response.status_code != 200:
+
+            print(
+                f"Telegram update error: "
+                f"{response.status_code}"
+            )
+
+            state["users"] = users
+
+            return state
+
+        data = response.json()
+
+        updates = data.get(
+            "result",
+            []
+        )
+
+        for update in updates:
+
+            update_id = update.get(
+                "update_id"
+            )
+
+            if update_id is not None:
+                state["update_offset"] = update_id
+
+            message = update.get(
+                "message"
+            )
+
+            if not message:
+                continue
+
+            chat = message.get(
+                "chat",
+                {}
+            )
+
+            user_chat_id = chat.get(
+                "id"
+            )
+
+            if not user_chat_id:
+                continue
+
+            text = (
+                message.get(
+                    "text",
+                    ""
+                )
+                .strip()
+                .lower()
+            )
+
+            user_chat_id = str(
+                user_chat_id
+            )
+
+            # -------------------------------
+            # START
+            # -------------------------------
+
+            if text.startswith("/start"):
+
+                if user_chat_id not in users:
+
+                    users.append(
+                        user_chat_id
+                    )
+
+                    send_telegram(
+                        "🟢 VILEN STOCK ALERTS\n\n"
+                        "You are now registered "
+                        "for stock alerts. 📊\n\n"
+                        "You will receive ENTRY "
+                        "and EXIT alerts here.\n\n"
+                        "Use /stop anytime to "
+                        "stop receiving alerts.",
+                        [user_chat_id]
+                    )
+
+                    print(
+                        f"New user registered: "
+                        f"{user_chat_id}"
+                    )
+
+                else:
+
+                    send_telegram(
+                        "✅ You are already "
+                        "registered for "
+                        "Vilen Stock Alerts.",
+                        [user_chat_id]
+                    )
+
+            # -------------------------------
+            # STOP
+            # -------------------------------
+
+            elif text.startswith("/stop"):
+
+                if user_chat_id == str(CHAT_ID):
+
+                    send_telegram(
+                        "⚠️ Owner account cannot "
+                        "be removed.",
+                        [user_chat_id]
+                    )
+
+                elif user_chat_id in users:
+
+                    users.remove(
+                        user_chat_id
+                    )
+
+                    send_telegram(
+                        "🔕 You have been "
+                        "removed from "
+                        "Vilen Stock Alerts.",
+                        [user_chat_id]
+                    )
+
+                    print(
+                        f"User removed: "
+                        f"{user_chat_id}"
+                    )
+
+            # -------------------------------
+            # HELP
+            # -------------------------------
+
+            elif text.startswith("/help"):
+
+                send_telegram(
+                    "🤖 VILEN STOCK ALERTS\n\n"
+                    "/start - Receive alerts\n"
+                    "/stop - Stop alerts\n"
+                    "/help - Show commands",
+                    [user_chat_id]
+                )
+
+        state["users"] = users
+
+        return state
+
+    except Exception as e:
+
+        print(
+            f"Telegram command error: {e}"
+        )
+
+        state["users"] = users
+
+        return state
+
+
+# ============================================================
+# YAHOO FINANCE
 # ============================================================
 
 def get_stock_data(symbol):
@@ -337,16 +572,14 @@ def get_stock_data(symbol):
 
         result = result[0]
 
-        timestamps = result.get("timestamp")
-
-        indicators = result.get(
-            "indicators",
-            {}
+        timestamps = result.get(
+            "timestamp"
         )
 
-        quote_data = indicators.get(
-            "quote",
-            []
+        quote_data = (
+            result
+            .get("indicators", {})
+            .get("quote", [])
         )
 
         if not timestamps or not quote_data:
@@ -366,7 +599,9 @@ def get_stock_data(symbol):
 
         valid_data = []
 
-        for i in range(len(timestamps)):
+        for i in range(
+            len(timestamps)
+        ):
 
             if i >= len(closes):
                 continue
@@ -379,6 +614,7 @@ def get_stock_data(symbol):
             volume = 0
 
             if i < len(volumes):
+
                 if volumes[i] is not None:
                     volume = volumes[i]
 
@@ -391,7 +627,6 @@ def get_stock_data(symbol):
             )
 
         if len(valid_data) < 25:
-
             return None
 
         return valid_data
@@ -505,7 +740,6 @@ def calculate_rsi(
         ) / period
 
     if average_loss == 0:
-
         return 100.0
 
     rs = (
@@ -532,26 +766,22 @@ def is_market_open():
     if india_time.weekday() >= 5:
         return False
 
-    current_time = (
-        india_time.time()
-    )
-
     return (
         time(9, 15)
-        <= current_time
+        <= india_time.time()
         <= time(15, 30)
     )
 
 
 # ============================================================
-# SCAN ONE STOCK
+# INDICATORS
 # ============================================================
 
 def get_indicators(data):
 
     prices = [
-        x["close"]
-        for x in data
+        item["close"]
+        for item in data
     ]
 
     latest_price = prices[-1]
@@ -566,12 +796,14 @@ def get_indicators(data):
     ) * 100
 
     volumes = [
-        x["volume"]
-        for x in data[:-1]
-        if x["volume"] > 0
+        item["volume"]
+        for item in data[:-1]
+        if item["volume"] > 0
     ]
 
     volumes = volumes[-10:]
+
+    average_volume = 0
 
     if volumes:
 
@@ -579,10 +811,6 @@ def get_indicators(data):
             sum(volumes)
             / len(volumes)
         )
-
-    else:
-
-        average_volume = 0
 
     latest_volume = data[-1]["volume"]
 
@@ -615,7 +843,7 @@ def get_indicators(data):
 
 
 # ============================================================
-# ENTRY CONDITION
+# ENTRY SIGNAL
 # ============================================================
 
 def is_entry_signal(indicators):
@@ -638,7 +866,7 @@ def is_entry_signal(indicators):
 
 
 # ============================================================
-# CREATE ENTRY
+# CREATE TRADE
 # ============================================================
 
 def create_entry(
@@ -651,12 +879,18 @@ def create_entry(
 
     target_price = (
         entry_price
-        * (1 + TARGET_PERCENT / 100)
+        * (
+            1
+            + TARGET_PERCENT / 100
+        )
     )
 
     stop_price = (
         entry_price
-        * (1 - STOP_PERCENT / 100)
+        * (
+            1
+            - STOP_PERCENT / 100
+        )
     )
 
     return {
@@ -669,7 +903,7 @@ def create_entry(
 
 
 # ============================================================
-# EXIT CHECK
+# EXIT
 # ============================================================
 
 def check_exit(
@@ -678,31 +912,36 @@ def check_exit(
     current_time
 ):
 
-    entry_price = trade["entry_price"]
-    target_price = trade["target_price"]
-    stop_price = trade["stop_price"]
+    entry_price = trade[
+        "entry_price"
+    ]
+
+    target_price = trade[
+        "target_price"
+    ]
+
+    stop_price = trade[
+        "stop_price"
+    ]
 
     entry_time = datetime.fromisoformat(
         trade["entry_time"]
     )
 
-    # TARGET
     if current_price >= target_price:
 
         return (
             "TARGET",
-            f"Price reached target ₹{target_price:.2f}"
+            f"Target ₹{target_price:.2f} reached"
         )
 
-    # STOP
     if current_price <= stop_price:
 
         return (
             "STOP",
-            f"Price reached stop ₹{stop_price:.2f}"
+            f"Stop ₹{stop_price:.2f} reached"
         )
 
-    # MAX HOLD TIME
     elapsed = (
         current_time
         - entry_time
@@ -714,15 +953,15 @@ def check_exit(
 
         return (
             "TIME",
-            f"Maximum hold time "
-            f"{MAX_HOLD_MINUTES} minutes reached"
+            f"Maximum {MAX_HOLD_MINUTES} "
+            f"minutes reached"
         )
 
     return None, None
 
 
 # ============================================================
-# MAIN MARKET SCANNER
+# MAIN SCANNER
 # ============================================================
 
 def check_market():
@@ -736,13 +975,46 @@ def check_market():
         f"{india_time.strftime('%d-%m-%Y %H:%M:%S')}"
     )
 
+    state = load_state()
+
+    # Register owner automatically
+    if CHAT_ID:
+
+        users = state.get(
+            "users",
+            []
+        )
+
+        if str(CHAT_ID) not in users:
+
+            users.append(
+                str(CHAT_ID)
+            )
+
+        state["users"] = users
+
+    # Check Telegram /start /stop
+    state = process_telegram_commands(
+        state
+    )
+
+    users = state.get(
+        "users",
+        []
+    )
+
+    print(
+        f"Registered Telegram users: "
+        f"{len(users)}"
+    )
+
     if not is_market_open():
 
         print("Market is currently closed.")
 
-        return
+        save_state(state)
 
-    state = load_state()
+        return
 
     active_trades = state.get(
         "active_trades",
@@ -766,9 +1038,13 @@ def check_market():
 
         successful += 1
 
-        indicators = get_indicators(data)
+        indicators = get_indicators(
+            data
+        )
 
-        current_price = indicators["price"]
+        current_price = indicators[
+            "price"
+        ]
 
         # ====================================================
         # ACTIVE TRADE
@@ -790,9 +1066,9 @@ def check_market():
 
             if exit_type:
 
-                entry_price = (
-                    trade["entry_price"]
-                )
+                entry_price = trade[
+                    "entry_price"
+                ]
 
                 profit_percent = (
                     (
@@ -802,13 +1078,11 @@ def check_market():
                     / entry_price
                 ) * 100
 
-                if profit_percent >= 0:
-
-                    result_icon = "🟢"
-
-                else:
-
-                    result_icon = "🔴"
+                icon = (
+                    "🟢"
+                    if profit_percent >= 0
+                    else "🔴"
+                )
 
                 message = (
                     "🚪 EXIT SIGNAL\n\n"
@@ -817,18 +1091,24 @@ def check_market():
                     f"💰 Entry: ₹{entry_price:.2f}\n"
                     f"💰 Exit: ₹{current_price:.2f}\n\n"
 
-                    f"{result_icon} "
-                    f"Move: {profit_percent:+.2f}%\n\n"
+                    f"{icon} Move: "
+                    f"{profit_percent:+.2f}%\n\n"
 
-                    f"📍 Reason: {exit_reason}\n"
+                    f"📍 Reason: "
+                    f"{exit_reason}\n"
+
                     f"⏰ Exit: "
                     f"{india_time.strftime('%H:%M:%S')}\n\n"
 
-                    "⚠️ Rule-based informational signal. "
+                    "⚠️ Rule-based "
+                    "informational signal. "
                     "Not guaranteed."
                 )
 
-                if send_telegram(message):
+                if send_telegram(
+                    message,
+                    users
+                ):
 
                     exits += 1
 
@@ -836,21 +1116,15 @@ def check_market():
                         stock_name
                     ]
 
-            else:
-
-                print(
-                    f"{stock_name}: "
-                    f"Active trade | "
-                    f"₹{current_price:.2f}"
-                )
-
             continue
 
         # ====================================================
         # NEW ENTRY
         # ====================================================
 
-        if is_entry_signal(indicators):
+        if is_entry_signal(
+            indicators
+        ):
 
             trade = create_entry(
                 stock_name,
@@ -866,6 +1140,7 @@ def check_market():
                 "🟢 ENTRY SIGNAL\n\n"
 
                 f"📌 Stock: {stock_name}\n"
+
                 f"💰 Entry Price: "
                 f"₹{trade['entry_price']:.2f}\n\n"
 
@@ -893,17 +1168,17 @@ def check_market():
                 f"⏰ Entry Time: "
                 f"{india_time.strftime('%H:%M:%S')}\n\n"
 
-                "⚠️ Rule-based informational signal. "
+                "⚠️ Rule-based "
+                "informational signal. "
                 "Not guaranteed."
             )
 
-            if send_telegram(message):
+            if send_telegram(
+                message,
+                users
+            ):
 
                 entries += 1
-
-    # ========================================================
-    # SAVE STATE
-    # ========================================================
 
     state["active_trades"] = active_trades
 
@@ -926,10 +1201,10 @@ def check_market():
 
 if __name__ == "__main__":
 
-    if not BOT_TOKEN or not CHAT_ID:
+    if not BOT_TOKEN:
 
         raise Exception(
-            "BOT_TOKEN or CHAT_ID is missing."
+            "BOT_TOKEN is missing."
         )
 
     check_market()
