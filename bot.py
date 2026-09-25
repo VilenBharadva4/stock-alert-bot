@@ -221,5 +221,9 @@ if __name__ == "__main__":
         raise Exception(
             "BOT_TOKEN or CHAT_ID is missing"
         )
-
+ send_telegram(
+        "🟢 STOCK BOT CHECK\n\n"
+        "GitHub Actions is running correctly.\n"
+        "Market scanner started successfully."
+    )
     check_market()
