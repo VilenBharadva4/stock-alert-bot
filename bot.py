@@ -1,16 +1,24 @@
 import os
+import json
+import base64
 import requests
-from datetime import datetime, time
+
+from datetime import datetime, time, timedelta
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# TELEGRAM SETTINGS
+# SETTINGS
 # ============================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY")
+
+STATE_FILE = "trade_state.json"
 
 
 # ============================================================
@@ -72,14 +80,21 @@ WATCHLIST = {
 
 
 # ============================================================
-# ALERT SETTINGS
+# TRADE SETTINGS
 # ============================================================
 
-PRICE_ALERT_PERCENT = 1.0
-VOLUME_SPIKE_MULTIPLIER = 2.0
+ENTRY_RSI_MIN = 50
+ENTRY_RSI_MAX = 68
 
-RSI_PERIOD = 14
+ENTRY_VOLUME_MULTIPLIER = 1.5
+
+TARGET_PERCENT = 1.0
+STOP_PERCENT = 0.7
+
+MAX_HOLD_MINUTES = 30
+
 EMA_PERIOD = 20
+RSI_PERIOD = 14
 
 
 # ============================================================
@@ -89,10 +104,13 @@ EMA_PERIOD = 20
 def send_telegram(message):
 
     if not BOT_TOKEN or not CHAT_ID:
-        print("Telegram credentials are missing.")
+        print("Telegram credentials missing.")
         return False
 
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    url = (
+        f"https://api.telegram.org/"
+        f"bot{BOT_TOKEN}/sendMessage"
+    )
 
     payload = {
         "chat_id": CHAT_ID,
@@ -108,32 +126,176 @@ def send_telegram(message):
         )
 
         if response.status_code == 200:
+
             print("Telegram message sent successfully.")
+
             return True
 
         print(
             f"Telegram error: "
-            f"{response.status_code} - {response.text}"
+            f"{response.status_code} "
+            f"{response.text[:300]}"
         )
 
     except Exception as e:
+
         print(f"Telegram connection error: {e}")
 
     return False
 
 
 # ============================================================
-# GET STOCK DATA
+# GITHUB STATE FUNCTIONS
+# ============================================================
+
+def load_state():
+
+    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
+        print("GitHub state storage not configured.")
+        return {}
+
+    url = (
+        f"https://api.github.com/repos/"
+        f"{GITHUB_REPOSITORY}/contents/{STATE_FILE}"
+    )
+
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json"
+    }
+
+    try:
+
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=15
+        )
+
+        if response.status_code == 404:
+
+            print("No previous trade state found.")
+
+            return {}
+
+        if response.status_code != 200:
+
+            print(
+                f"State load error: "
+                f"{response.status_code}"
+            )
+
+            return {}
+
+        data = response.json()
+
+        content = data.get("content", "")
+
+        decoded = base64.b64decode(
+            content
+        ).decode("utf-8")
+
+        return json.loads(decoded)
+
+    except Exception as e:
+
+        print(f"State load error: {e}")
+
+        return {}
+
+
+def save_state(state):
+
+    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
+
+        print("GitHub state storage unavailable.")
+
+        return False
+
+    url = (
+        f"https://api.github.com/repos/"
+        f"{GITHUB_REPOSITORY}/contents/{STATE_FILE}"
+    )
+
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json"
+    }
+
+    try:
+
+        # Check existing file
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=15
+        )
+
+        sha = None
+
+        if response.status_code == 200:
+
+            sha = response.json().get("sha")
+
+        content = json.dumps(
+            state,
+            indent=2
+        )
+
+        encoded = base64.b64encode(
+            content.encode("utf-8")
+        ).decode("utf-8")
+
+        payload = {
+            "message": "Update trade state",
+            "content": encoded
+        }
+
+        if sha:
+            payload["sha"] = sha
+
+        response = requests.put(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=15
+        )
+
+        if response.status_code in [200, 201]:
+
+            print("Trade state saved.")
+
+            return True
+
+        print(
+            f"State save error: "
+            f"{response.status_code} "
+            f"{response.text[:300]}"
+        )
+
+    except Exception as e:
+
+        print(f"State save error: {e}")
+
+    return False
+
+
+# ============================================================
+# YAHOO FINANCE DATA
 # ============================================================
 
 def get_stock_data(symbol):
 
     try:
 
-        encoded_symbol = quote(symbol, safe="")
+        encoded_symbol = quote(
+            symbol,
+            safe=""
+        )
 
         url = (
-            "https://query1.finance.yahoo.com/v8/finance/chart/"
+            "https://query1.finance.yahoo.com/"
+            "v8/finance/chart/"
             f"{encoded_symbol}"
         )
 
@@ -164,7 +326,11 @@ def get_stock_data(symbol):
 
         data = response.json()
 
-        result = data.get("chart", {}).get("result")
+        result = (
+            data
+            .get("chart", {})
+            .get("result")
+        )
 
         if not result:
             return None
@@ -173,17 +339,30 @@ def get_stock_data(symbol):
 
         timestamps = result.get("timestamp")
 
-        indicators = result.get("indicators", {})
+        indicators = result.get(
+            "indicators",
+            {}
+        )
 
-        quote_data = indicators.get("quote", [])
+        quote_data = indicators.get(
+            "quote",
+            []
+        )
 
         if not timestamps or not quote_data:
             return None
 
         quote_data = quote_data[0]
 
-        closes = quote_data.get("close", [])
-        volumes = quote_data.get("volume", [])
+        closes = quote_data.get(
+            "close",
+            []
+        )
+
+        volumes = quote_data.get(
+            "volume",
+            []
+        )
 
         valid_data = []
 
@@ -212,45 +391,59 @@ def get_stock_data(symbol):
             )
 
         if len(valid_data) < 25:
-            print(f"{symbol}: Not enough data.")
+
             return None
 
         return valid_data
 
     except Exception as e:
 
-        print(f"{symbol} error: {e}")
+        print(
+            f"{symbol} error: {e}"
+        )
 
         return None
 
 
 # ============================================================
-# EMA CALCULATION
+# EMA
 # ============================================================
 
-def calculate_ema(prices, period):
+def calculate_ema(
+    prices,
+    period
+):
 
     if len(prices) < period:
         return None
 
-    multiplier = 2 / (period + 1)
+    multiplier = (
+        2 / (period + 1)
+    )
 
-    ema = sum(prices[:period]) / period
+    ema = (
+        sum(prices[:period])
+        / period
+    )
 
     for price in prices[period:]:
 
         ema = (
-            (price - ema) * multiplier
+            (price - ema)
+            * multiplier
         ) + ema
 
     return ema
 
 
 # ============================================================
-# RSI CALCULATION
+# RSI
 # ============================================================
 
-def calculate_rsi(prices, period=14):
+def calculate_rsi(
+    prices,
+    period=14
+):
 
     if len(prices) <= period:
         return None
@@ -258,9 +451,15 @@ def calculate_rsi(prices, period=14):
     gains = []
     losses = []
 
-    for i in range(1, len(prices)):
+    for i in range(
+        1,
+        len(prices)
+    ):
 
-        change = prices[i] - prices[i - 1]
+        change = (
+            prices[i]
+            - prices[i - 1]
+        )
 
         if change > 0:
 
@@ -270,31 +469,54 @@ def calculate_rsi(prices, period=14):
         else:
 
             gains.append(0)
-            losses.append(abs(change))
+            losses.append(
+                abs(change)
+            )
 
-    average_gain = sum(gains[:period]) / period
-    average_loss = sum(losses[:period]) / period
+    average_gain = (
+        sum(gains[:period])
+        / period
+    )
 
-    for i in range(period, len(gains)):
+    average_loss = (
+        sum(losses[:period])
+        / period
+    )
+
+    for i in range(
+        period,
+        len(gains)
+    ):
 
         average_gain = (
-            (average_gain * (period - 1))
+            (
+                average_gain
+                * (period - 1)
+            )
             + gains[i]
         ) / period
 
         average_loss = (
-            (average_loss * (period - 1))
+            (
+                average_loss
+                * (period - 1)
+            )
             + losses[i]
         ) / period
 
     if average_loss == 0:
+
         return 100.0
 
-    rs = average_gain / average_loss
+    rs = (
+        average_gain
+        / average_loss
+    )
 
-    rsi = 100 - (100 / (1 + rs))
-
-    return rsi
+    return (
+        100
+        - (100 / (1 + rs))
+    )
 
 
 # ============================================================
@@ -310,20 +532,197 @@ def is_market_open():
     if india_time.weekday() >= 5:
         return False
 
-    current_time = india_time.time()
-
-    market_start = time(9, 15)
-    market_end = time(15, 30)
+    current_time = (
+        india_time.time()
+    )
 
     return (
-        market_start
+        time(9, 15)
         <= current_time
-        <= market_end
+        <= time(15, 30)
     )
 
 
 # ============================================================
-# MARKET SCANNER
+# SCAN ONE STOCK
+# ============================================================
+
+def get_indicators(data):
+
+    prices = [
+        x["close"]
+        for x in data
+    ]
+
+    latest_price = prices[-1]
+    previous_price = prices[-2]
+
+    price_change = (
+        (
+            latest_price
+            - previous_price
+        )
+        / previous_price
+    ) * 100
+
+    volumes = [
+        x["volume"]
+        for x in data[:-1]
+        if x["volume"] > 0
+    ]
+
+    volumes = volumes[-10:]
+
+    if volumes:
+
+        average_volume = (
+            sum(volumes)
+            / len(volumes)
+        )
+
+    else:
+
+        average_volume = 0
+
+    latest_volume = data[-1]["volume"]
+
+    volume_ratio = 0
+
+    if average_volume > 0:
+
+        volume_ratio = (
+            latest_volume
+            / average_volume
+        )
+
+    rsi = calculate_rsi(
+        prices,
+        RSI_PERIOD
+    )
+
+    ema20 = calculate_ema(
+        prices,
+        EMA_PERIOD
+    )
+
+    return {
+        "price": latest_price,
+        "price_change": price_change,
+        "volume_ratio": volume_ratio,
+        "rsi": rsi,
+        "ema20": ema20
+    }
+
+
+# ============================================================
+# ENTRY CONDITION
+# ============================================================
+
+def is_entry_signal(indicators):
+
+    price = indicators["price"]
+    change = indicators["price_change"]
+    volume = indicators["volume_ratio"]
+    rsi = indicators["rsi"]
+    ema20 = indicators["ema20"]
+
+    if rsi is None or ema20 is None:
+        return False
+
+    return (
+        price > ema20
+        and ENTRY_RSI_MIN <= rsi <= ENTRY_RSI_MAX
+        and change > 0
+        and volume >= ENTRY_VOLUME_MULTIPLIER
+    )
+
+
+# ============================================================
+# CREATE ENTRY
+# ============================================================
+
+def create_entry(
+    stock_name,
+    indicators,
+    india_time
+):
+
+    entry_price = indicators["price"]
+
+    target_price = (
+        entry_price
+        * (1 + TARGET_PERCENT / 100)
+    )
+
+    stop_price = (
+        entry_price
+        * (1 - STOP_PERCENT / 100)
+    )
+
+    return {
+        "stock": stock_name,
+        "entry_price": entry_price,
+        "target_price": target_price,
+        "stop_price": stop_price,
+        "entry_time": india_time.isoformat()
+    }
+
+
+# ============================================================
+# EXIT CHECK
+# ============================================================
+
+def check_exit(
+    trade,
+    current_price,
+    current_time
+):
+
+    entry_price = trade["entry_price"]
+    target_price = trade["target_price"]
+    stop_price = trade["stop_price"]
+
+    entry_time = datetime.fromisoformat(
+        trade["entry_time"]
+    )
+
+    # TARGET
+    if current_price >= target_price:
+
+        return (
+            "TARGET",
+            f"Price reached target ₹{target_price:.2f}"
+        )
+
+    # STOP
+    if current_price <= stop_price:
+
+        return (
+            "STOP",
+            f"Price reached stop ₹{stop_price:.2f}"
+        )
+
+    # MAX HOLD TIME
+    elapsed = (
+        current_time
+        - entry_time
+    )
+
+    if elapsed >= timedelta(
+        minutes=MAX_HOLD_MINUTES
+    ):
+
+        return (
+            "TIME",
+            f"Maximum hold time "
+            f"{MAX_HOLD_MINUTES} minutes reached"
+        )
+
+    return None, None
+
+
+# ============================================================
+# MAIN MARKET SCANNER
 # ============================================================
 
 def check_market():
@@ -343,9 +742,17 @@ def check_market():
 
         return
 
-    alerts_sent = 0
-    successful_stocks = 0
-    failed_stocks = 0
+    state = load_state()
+
+    active_trades = state.get(
+        "active_trades",
+        {}
+    )
+
+    successful = 0
+    failed = 0
+    entries = 0
+    exits = 0
 
     for stock_name, symbol in WATCHLIST.items():
 
@@ -353,235 +760,163 @@ def check_market():
 
         if not data:
 
-            failed_stocks += 1
+            failed += 1
 
             continue
 
-        successful_stocks += 1
+        successful += 1
 
-        # ----------------------------------------------------
-        # PRICES
-        # ----------------------------------------------------
+        indicators = get_indicators(data)
 
-        prices = [
-            item["close"]
-            for item in data
-        ]
+        current_price = indicators["price"]
 
-        latest_price = prices[-1]
-        previous_price = prices[-2]
+        # ====================================================
+        # ACTIVE TRADE
+        # ====================================================
 
-        if previous_price <= 0:
+        if stock_name in active_trades:
+
+            trade = active_trades[
+                stock_name
+            ]
+
+            exit_type, exit_reason = (
+                check_exit(
+                    trade,
+                    current_price,
+                    india_time
+                )
+            )
+
+            if exit_type:
+
+                entry_price = (
+                    trade["entry_price"]
+                )
+
+                profit_percent = (
+                    (
+                        current_price
+                        - entry_price
+                    )
+                    / entry_price
+                ) * 100
+
+                if profit_percent >= 0:
+
+                    result_icon = "🟢"
+
+                else:
+
+                    result_icon = "🔴"
+
+                message = (
+                    "🚪 EXIT SIGNAL\n\n"
+
+                    f"📌 Stock: {stock_name}\n"
+                    f"💰 Entry: ₹{entry_price:.2f}\n"
+                    f"💰 Exit: ₹{current_price:.2f}\n\n"
+
+                    f"{result_icon} "
+                    f"Move: {profit_percent:+.2f}%\n\n"
+
+                    f"📍 Reason: {exit_reason}\n"
+                    f"⏰ Exit: "
+                    f"{india_time.strftime('%H:%M:%S')}\n\n"
+
+                    "⚠️ Rule-based informational signal. "
+                    "Not guaranteed."
+                )
+
+                if send_telegram(message):
+
+                    exits += 1
+
+                    del active_trades[
+                        stock_name
+                    ]
+
+            else:
+
+                print(
+                    f"{stock_name}: "
+                    f"Active trade | "
+                    f"₹{current_price:.2f}"
+                )
+
             continue
 
-        # ----------------------------------------------------
-        # 5-MIN PRICE CHANGE
-        # ----------------------------------------------------
+        # ====================================================
+        # NEW ENTRY
+        # ====================================================
 
-        price_change = (
-            (latest_price - previous_price)
-            / previous_price
-        ) * 100
+        if is_entry_signal(indicators):
 
-        # ----------------------------------------------------
-        # VOLUME
-        # ----------------------------------------------------
-
-        recent_volumes = [
-            item["volume"]
-            for item in data[:-1]
-            if item["volume"] > 0
-        ]
-
-        recent_volumes = recent_volumes[-10:]
-
-        if recent_volumes:
-
-            average_volume = (
-                sum(recent_volumes)
-                / len(recent_volumes)
+            trade = create_entry(
+                stock_name,
+                indicators,
+                india_time
             )
 
-        else:
+            active_trades[
+                stock_name
+            ] = trade
 
-            average_volume = 0
+            message = (
+                "🟢 ENTRY SIGNAL\n\n"
 
-        latest_volume = data[-1]["volume"]
+                f"📌 Stock: {stock_name}\n"
+                f"💰 Entry Price: "
+                f"₹{trade['entry_price']:.2f}\n\n"
 
-        volume_ratio = 0
+                f"🎯 Target: "
+                f"₹{trade['target_price']:.2f}\n"
 
-        if average_volume > 0:
+                f"🛑 Stop: "
+                f"₹{trade['stop_price']:.2f}\n\n"
 
-            volume_ratio = (
-                latest_volume
-                / average_volume
+                f"📊 RSI(14): "
+                f"{indicators['rsi']:.1f}\n"
+
+                f"📏 EMA20: "
+                f"₹{indicators['ema20']:.2f}\n"
+
+                f"📈 5M Move: "
+                f"{indicators['price_change']:+.2f}%\n"
+
+                f"📊 Volume: "
+                f"{indicators['volume_ratio']:.1f}x average\n\n"
+
+                f"⏳ Max Hold: "
+                f"{MAX_HOLD_MINUTES} minutes\n"
+
+                f"⏰ Entry Time: "
+                f"{india_time.strftime('%H:%M:%S')}\n\n"
+
+                "⚠️ Rule-based informational signal. "
+                "Not guaranteed."
             )
 
-        # ----------------------------------------------------
-        # RSI
-        # ----------------------------------------------------
+            if send_telegram(message):
 
-        rsi = calculate_rsi(
-            prices,
-            RSI_PERIOD
-        )
+                entries += 1
 
-        # ----------------------------------------------------
-        # EMA 20
-        # ----------------------------------------------------
+    # ========================================================
+    # SAVE STATE
+    # ========================================================
 
-        ema20 = calculate_ema(
-            prices,
-            EMA_PERIOD
-        )
+    state["active_trades"] = active_trades
 
-        if rsi is None or ema20 is None:
-            continue
-
-        # ----------------------------------------------------
-        # INDICATOR STATUS
-        # ----------------------------------------------------
-
-        if latest_price > ema20:
-
-            ema_status = "🟢 Price above EMA20"
-
-        elif latest_price < ema20:
-
-            ema_status = "🔴 Price below EMA20"
-
-        else:
-
-            ema_status = "⚪ Price near EMA20"
-
-        if rsi >= 70:
-
-            rsi_status = "🔴 RSI Overbought"
-
-        elif rsi <= 30:
-
-            rsi_status = "🟢 RSI Oversold"
-
-        elif rsi >= 50:
-
-            rsi_status = "🟢 RSI Positive Zone"
-
-        else:
-
-            rsi_status = "🟡 RSI Weak Zone"
-
-        # ----------------------------------------------------
-        # ALERT CONDITIONS
-        # ----------------------------------------------------
-
-        price_alert = (
-            abs(price_change)
-            >= PRICE_ALERT_PERCENT
-        )
-
-        volume_alert = (
-            volume_ratio
-            >= VOLUME_SPIKE_MULTIPLIER
-        )
-
-        rsi_extreme = (
-            rsi >= 70
-            or rsi <= 30
-        )
-
-        # Alert only when meaningful movement exists
-        if (
-            not price_alert
-            and not volume_alert
-            and not rsi_extreme
-        ):
-            continue
-
-        # ----------------------------------------------------
-        # DIRECTION
-        # ----------------------------------------------------
-
-        if price_change > 0:
-
-            direction = "🟢 UP"
-
-        elif price_change < 0:
-
-            direction = "🔴 DOWN"
-
-        else:
-
-            direction = "⚪ FLAT"
-
-        # ----------------------------------------------------
-        # REASONS
-        # ----------------------------------------------------
-
-        reasons = []
-
-        if price_alert:
-
-            reasons.append(
-                f"📈 5m Price Move: "
-                f"{price_change:+.2f}%"
-            )
-
-        if volume_alert:
-
-            reasons.append(
-                f"📊 Volume Spike: "
-                f"{volume_ratio:.1f}x average"
-            )
-
-        if rsi_extreme:
-
-            reasons.append(
-                f"⚡ RSI: {rsi:.1f}"
-            )
-
-        reason_text = "\n".join(reasons)
-
-        # ----------------------------------------------------
-        # TELEGRAM MESSAGE
-        # ----------------------------------------------------
-
-        message = (
-            "🚨 NIFTY 50 MARKET ALERT\n\n"
-
-            f"📌 Stock: {stock_name}\n"
-            f"💰 Price: ₹{latest_price:.2f}\n"
-            f"{direction}\n\n"
-
-            f"{reason_text}\n\n"
-
-            f"📊 RSI(14): {rsi:.1f}\n"
-            f"{rsi_status}\n\n"
-
-            f"📏 EMA(20): ₹{ema20:.2f}\n"
-            f"{ema_status}\n\n"
-
-            f"⏰ Time: "
-            f"{india_time.strftime('%d-%m-%Y %H:%M:%S')}\n"
-
-            "📡 Data: Yahoo Finance\n\n"
-
-            "⚠️ Informational market alert. "
-            "Not investment advice."
-        )
-
-        if send_telegram(message):
-
-            alerts_sent += 1
-
-    # --------------------------------------------------------
-    # FINAL LOG
-    # --------------------------------------------------------
+    save_state(state)
 
     print(
         f"Scan completed. "
-        f"Successful: {successful_stocks}, "
-        f"Failed: {failed_stocks}, "
-        f"Alerts sent: {alerts_sent}"
+        f"Successful: {successful}, "
+        f"Failed: {failed}, "
+        f"New entries: {entries}, "
+        f"Exits: {exits}, "
+        f"Active trades: "
+        f"{len(active_trades)}"
     )
 
 
@@ -594,8 +929,7 @@ if __name__ == "__main__":
     if not BOT_TOKEN or not CHAT_ID:
 
         raise Exception(
-            "BOT_TOKEN or CHAT_ID is missing. "
-            "Check GitHub Secrets."
+            "BOT_TOKEN or CHAT_ID is missing."
         )
 
     check_market()
