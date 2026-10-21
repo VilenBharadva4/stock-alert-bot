@@ -1,55 +1,5 @@
 {
-  "active_trades": {
-    "ASIANPAINT": {
-      "stock": "ASIANPAINT",
-      "entry_price": 2330.699951171875,
-      "target_price": 2354.006950683594,
-      "stop_price": 2314.385051513672,
-      "entry_time": "2026-10-20T13:24:07.119066+05:30"
-    },
-    "BEL": {
-      "stock": "BEL",
-      "entry_price": 377.20001220703125,
-      "target_price": 380.9720123291016,
-      "stop_price": 374.559612121582,
-      "entry_time": "2026-10-20T13:24:07.119066+05:30"
-    },
-    "HEROMOTOCO": {
-      "stock": "HEROMOTOCO",
-      "entry_price": 5230.0,
-      "target_price": 5282.3,
-      "stop_price": 5193.39,
-      "entry_time": "2026-10-20T13:24:07.119066+05:30"
-    },
-    "INFY": {
-      "stock": "INFY",
-      "entry_price": 1130.699951171875,
-      "target_price": 1142.0069506835937,
-      "stop_price": 1122.7850515136718,
-      "entry_time": "2026-10-20T13:24:07.119066+05:30"
-    },
-    "ONGC": {
-      "stock": "ONGC",
-      "entry_price": 225.0,
-      "target_price": 227.25,
-      "stop_price": 223.425,
-      "entry_time": "2026-10-20T13:24:07.119066+05:30"
-    },
-    "TATACONSUM": {
-      "stock": "TATACONSUM",
-      "entry_price": 966.5,
-      "target_price": 976.165,
-      "stop_price": 959.7345,
-      "entry_time": "2026-10-20T13:24:07.119066+05:30"
-    },
-    "TITAN": {
-      "stock": "TITAN",
-      "entry_price": 4424.2001953125,
-      "target_price": 4468.442197265625,
-      "stop_price": 4393.230793945312,
-      "entry_time": "2026-10-20T13:24:07.119066+05:30"
-    }
-  },
+  "active_trades": {},
   "users": [
     "6771542606"
   ],
