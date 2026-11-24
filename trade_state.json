@@ -1,5 +1,76 @@
 {
-  "active_trades": {},
+  "active_trades": {
+    "ASIANPAINT": {
+      "stock": "ASIANPAINT",
+      "entry_price": 2580.39990234375,
+      "target_price": 2606.2039013671874,
+      "stop_price": 2562.337103027344,
+      "entry_time": "2026-11-24T12:02:21.333178+05:30"
+    },
+    "BAJAJFINSV": {
+      "stock": "BAJAJFINSV",
+      "entry_price": 1880.0999755859375,
+      "target_price": 1898.900975341797,
+      "stop_price": 1866.939275756836,
+      "entry_time": "2026-11-24T12:02:21.333178+05:30"
+    },
+    "EICHERMOT": {
+      "stock": "EICHERMOT",
+      "entry_price": 8172.5,
+      "target_price": 8254.225,
+      "stop_price": 8115.2925,
+      "entry_time": "2026-11-24T12:02:21.333178+05:30"
+    },
+    "HEROMOTOCO": {
+      "stock": "HEROMOTOCO",
+      "entry_price": 5535.0,
+      "target_price": 5590.35,
+      "stop_price": 5496.255,
+      "entry_time": "2026-11-24T12:02:21.333178+05:30"
+    },
+    "JSWSTEEL": {
+      "stock": "JSWSTEEL",
+      "entry_price": 1311.9000244140625,
+      "target_price": 1325.019024658203,
+      "stop_price": 1302.716724243164,
+      "entry_time": "2026-11-24T12:02:21.333178+05:30"
+    },
+    "MAXHEALTH": {
+      "stock": "MAXHEALTH",
+      "entry_price": 1089.550048828125,
+      "target_price": 1100.4455493164062,
+      "stop_price": 1081.9231984863281,
+      "entry_time": "2026-11-24T12:02:21.333178+05:30"
+    },
+    "POWERGRID": {
+      "stock": "POWERGRID",
+      "entry_price": 264.8500061035156,
+      "target_price": 267.4985061645508,
+      "stop_price": 262.99605606079103,
+      "entry_time": "2026-11-24T12:02:21.333178+05:30"
+    },
+    "SBILIFE": {
+      "stock": "SBILIFE",
+      "entry_price": 1804.9000244140625,
+      "target_price": 1822.9490246582031,
+      "stop_price": 1792.265724243164,
+      "entry_time": "2026-11-24T12:02:21.333178+05:30"
+    },
+    "SHRIRAMFIN": {
+      "stock": "SHRIRAMFIN",
+      "entry_price": 995.9000244140625,
+      "target_price": 1005.8590246582031,
+      "stop_price": 988.9287242431641,
+      "entry_time": "2026-11-24T12:02:21.333178+05:30"
+    },
+    "TRENT": {
+      "stock": "TRENT",
+      "entry_price": 3208.0,
+      "target_price": 3240.08,
+      "stop_price": 3185.544,
+      "entry_time": "2026-11-24T12:02:21.333178+05:30"
+    }
+  },
   "users": [
     "6771542606"
   ],
